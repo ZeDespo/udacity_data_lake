@@ -3,7 +3,7 @@ aggregate_songplay_data = ("""
     FROM logs l
     JOIN songs s ON l.song_name = s.title
     JOIN artists a ON l.artist_name = a.artist_name
-""")
+""")  # Performs joins on three dataframes to gather facts of the users in the events log.
 
 
 artist_select_distinct = ("""
@@ -16,7 +16,7 @@ artist_select_distinct = ("""
     FROM sparkify
     GROUP BY artist_id, artist_name, artist_location, artist_latitude, artist_longitude
     ORDER BY MAX(id) DESC
-""")
+""")  # Grab the rows in the dataframe that only have the most up-to-date artist information.
 
 
 get_songplay_log_data = ("""
@@ -30,7 +30,7 @@ get_songplay_log_data = ("""
     artist as artist_name, 
     ts
     FROM sparkify
-""")
+""")  # Standard select query to lay foundation for songplay facts dataframe
 
 
 user_select_distinct = ("""
@@ -38,5 +38,5 @@ user_select_distinct = ("""
     FROM sparkify 
     GROUP BY user_id, first_name, last_name, gender, level
     ORDER BY MAX(id) DESC
-""")
+""")  # Grab the rows in the dataframe that only have the most up-to-date user information.
 
