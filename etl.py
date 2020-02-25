@@ -16,13 +16,13 @@ def create_logger(debug_mode: Optional[bool]=False) -> logging.getLogger:
     :param debug_mode: Is the developer debugging this or no?
     :return: The logging object.
     """
-    logger = logging.getLogger(os.path.basename(__name__))
-    logger.setLevel(logging.INFO if not debug_mode else logging.DEBUG)
+    _logger = logging.getLogger(os.path.basename(__name__))
+    _logger.setLevel(logging.INFO if not debug_mode else logging.DEBUG)
     formatter = logging.Formatter('%(filename)s:%(funcName)s:%(levelname)s:%(message)s')
     stream_handler = logging.StreamHandler()
     stream_handler.setFormatter(formatter)
-    logger.addHandler(stream_handler)
-    return logger
+    _logger.addHandler(stream_handler)
+    return _logger
 
 
 def create_spark_session():
@@ -43,13 +43,13 @@ def process_song_data(spark: SparkSession, input_base_path: str, output_base_pat
     """
     song_data = 's3a://udacity-dend/song_data/A/A/*/*.json'
     logger.info("Loading artist and song metadata.")
-    logger.warn("Due to overpopulation on the source bucket, only a small subset of song logs will be ingested.")
+    logger.warning("Due to overpopulation on the source bucket, only a small subset of song logs will be ingested.")
     df = spark.read.json(song_data)
     logger.info("Done.")
     song_columns = ["song_id", "title", "artist_id", "year", "duration"]
     artist_columns = ["artist_id", "artist_name", "artist_location", "artist_latitude", "artist_longitude"]
     logger.info("Gathering song metadata.")
-    song_df = df.select(song_columns)
+    song_df = df.select(song_columns).dropDuplicates()
     logger.info("Done.")
     logger.info("Gathering artist metadata.")
     artist_df = df.select(artist_columns).withColumn("id", monotonically_increasing_id())
@@ -60,8 +60,13 @@ def process_song_data(spark: SparkSession, input_base_path: str, output_base_pat
     artist_df.createOrReplaceTempView('artists')  # Will need this for another function.
     song_df.createOrReplaceTempView('songs')  # Ditto.
     logger.debug("Done.")
-    song_df.write.format("json").mode("overwrite").save(output_base_path + "songs.json")
-    artist_df.write.format("json").mode("overwrite").save(output_base_path + "artists.json")
+    # song_df.write.format("json").mode("overwrite").save(output_base_path + "songs.json")
+    # artist_df.write.format("json").mode("overwrite").save(output_base_path + "artists.json")
+    song_df.write().format("parquet").mode("overwrite").partitionBy(["year", "artist_id"])\
+        .save(output_base_path + "songs")
+    artist_df.write().format("parquet").mode("overwrite").partitionBy(["artist_id", "artist_name"])\
+        .save(output_base_path + "artists")
+
 
 def process_log_data(spark: SparkSession, input_base_path: str, output_base_path: str) -> None:
     """
@@ -69,8 +74,6 @@ def process_log_data(spark: SparkSession, input_base_path: str, output_base_path
     :param spark: The sparksession object
     :param input_base_path: The base path that holds the ingestable\ data
     :param output_base_path: The base path that details where to save the output.
-    :param artist_df: The dataframe holding artist information from process_song_data()
-    :param song_df: The dataframe holding song information from process_song_data()
     :return: None
     """
     log_data = input_base_path + 'log_data/*/*/*.json'
@@ -81,7 +84,7 @@ def process_log_data(spark: SparkSession, input_base_path: str, output_base_path
     log_df = df.select(columns).where(df.page == "NextSong").withColumn("id", monotonically_increasing_id())
     log_df.createOrReplaceTempView("sparkify")
     logger.info("Done.")
-    logger.info("Gathering songplays fact dataframe")
+    logger.info("Gathering songplay's fact dataframe")
     songplay_logs = spark.sql(get_songplay_log_data)
     songplay_logs.createOrReplaceTempView('logs')
     get_start_time = udf(lambda x: int(int(x) / 1000))
@@ -93,18 +96,23 @@ def process_log_data(spark: SparkSession, input_base_path: str, output_base_path
     user_df = spark.sql(user_select_distinct)
     logger.info("Done.")
     logger.info("Gathering time data.")
-    time_df = songplay_with_ids.select('start_time').withColumn("datetime", get_datetime('start_time')).select(
-        hour('datetime').alias('hour'),
-        dayofmonth('datetime').alias('day'),
-        weekofyear('datetime').alias('week'),
-        month('datetime').alias('month'),
-        year('datetime').alias('year'),
-        date_format('datetime', 'E').alias('weekday')
-    ).drop('datetime')
+    time_df = songplay_with_ids.select('start_time').dropDuplicates().\
+        withColumn("datetime", get_datetime('start_time')).select(
+            hour('datetime').alias('hour'),
+            dayofmonth('datetime').alias('day'),
+            weekofyear('datetime').alias('week'),
+            month('datetime').alias('month'),
+            year('datetime').alias('year'),
+            date_format('datetime', 'E').alias('weekday')
+        ).drop('datetime')
     logger.info("Done.")
-    user_df.write.format("json").mode("overwrite").save(output_base_path + "users.json")
-    time_df.write.format("json").mode("overwrite").save(output_base_path + "time.json")
-    songplay_with_ids.write.format("json").mode("overwrite").save(output_base_path + "songplays.json")
+    # user_df.write.format("json").mode("overwrite").save(output_base_path + "users.json")
+    # time_df.write.format("json").mode("overwrite").save(output_base_path + "time.json")
+    # songplay_with_ids.write.format("json").mode("overwrite").save(output_base_path + "songplays.json")
+    user_df.write().format("parquet").mode("overwrite").partitionBy(["user_id"]).save(output_base_path + "users")
+    time_df.write().format("parquet").mode("overwrite").partitionBy(["year", "month"]).save(output_base_path + "users")
+    songplay_with_ids.write().format("parquet").mode("overwrite").partitionBy(["start_time"])\
+        .save(output_base_path + "songplays")
 
 
 def main() -> None:
