@@ -46,7 +46,7 @@ def process_song_data(spark: SparkSession, input_base_path: str, output_base_pat
     logger.warning("Due to overpopulation on the source bucket, only a small subset of song logs will be ingested.")
     df = spark.read.json(song_data)
     logger.info("Done.")
-    song_columns = ["song_id", "title", "artist_id", "year", "duration"]
+    song_columns = ["song_id", "title", "artist_id", "artist_name", "year", "duration"]
     artist_columns = ["artist_id", "artist_name", "artist_location", "artist_latitude", "artist_longitude"]
     logger.info("Gathering song metadata.")
     song_df = df.select(song_columns).dropDuplicates()
@@ -60,12 +60,13 @@ def process_song_data(spark: SparkSession, input_base_path: str, output_base_pat
     artist_df.createOrReplaceTempView('artists')  # Will need this for another function.
     song_df.createOrReplaceTempView('songs')  # Ditto.
     logger.debug("Done.")
-    # song_df.write.format("json").mode("overwrite").save(output_base_path + "songs.json")
-    # artist_df.write.format("json").mode("overwrite").save(output_base_path + "artists.json")
-    song_df.write().format("parquet").mode("overwrite").partitionBy(["year", "artist_id"])\
+    logger.info("Writing song dataframe to s3 partitioned by year and artist_name in parquet format.")
+    song_df.write.partitionBy(["year", "artist_name"]).format("parquet").mode("overwrite")\
         .save(output_base_path + "songs")
-    artist_df.write().format("parquet").mode("overwrite").partitionBy(["artist_id", "artist_name"])\
-        .save(output_base_path + "artists")
+    logger.info("Done.")
+    logger.info("Writing artist dataframe to s3 in parquet format.")
+    artist_df.write.format("parquet").mode("overwrite").save(output_base_path + "artists")
+    logger.info("Done.")
 
 
 def process_log_data(spark: SparkSession, input_base_path: str, output_base_path: str) -> None:
@@ -85,18 +86,19 @@ def process_log_data(spark: SparkSession, input_base_path: str, output_base_path
     log_df.createOrReplaceTempView("sparkify")
     logger.info("Done.")
     logger.info("Gathering songplay's fact dataframe")
-    songplay_logs = spark.sql(get_songplay_log_data)
-    songplay_logs.createOrReplaceTempView('logs')
+    songplay_df = spark.sql(get_songplay_log_data)
+    songplay_df.createOrReplaceTempView('logs')
     get_start_time = udf(lambda x: int(int(x) / 1000))
     get_datetime = udf(lambda x: str(datetime.fromtimestamp(int(x))))
-    songplay_with_ids = spark.sql(aggregate_songplay_data).withColumn('start_time', get_start_time('ts'))\
-        .drop('ts').withColumn('songplay_id', monotonically_increasing_id())
+    songplay_df = spark.sql(aggregate_songplay_data).withColumn('start_time', get_start_time('ts'))\
+        .withColumn('songplay_id', monotonically_increasing_id()).withColumn("datetime", get_datetime("start_time"))\
+        .withColumn("year", year('datetime')).withColumn("month", month('datetime')).drop('datetime', 'ts')
     logger.info("Done.")
     logger.info("Gathering user data.")
     user_df = spark.sql(user_select_distinct)
     logger.info("Done.")
     logger.info("Gathering time data.")
-    time_df = songplay_with_ids.select('start_time').dropDuplicates().\
+    time_df = songplay_df.select('start_time').dropDuplicates().\
         withColumn("datetime", get_datetime('start_time')).select(
             hour('datetime').alias('hour'),
             dayofmonth('datetime').alias('day'),
@@ -106,13 +108,16 @@ def process_log_data(spark: SparkSession, input_base_path: str, output_base_path
             date_format('datetime', 'E').alias('weekday')
         ).drop('datetime')
     logger.info("Done.")
-    # user_df.write.format("json").mode("overwrite").save(output_base_path + "users.json")
-    # time_df.write.format("json").mode("overwrite").save(output_base_path + "time.json")
-    # songplay_with_ids.write.format("json").mode("overwrite").save(output_base_path + "songplays.json")
-    user_df.write().format("parquet").mode("overwrite").partitionBy(["user_id"]).save(output_base_path + "users")
-    time_df.write().format("parquet").mode("overwrite").partitionBy(["year", "month"]).save(output_base_path + "users")
-    songplay_with_ids.write().format("parquet").mode("overwrite").partitionBy(["start_time"])\
-        .save(output_base_path + "songplays")
+    logger.info("Writing users dataframe to s3 in parquet format.")
+    user_df.write.format("parquet").mode("overwrite").save(output_base_path + "users")
+    logger.info("Done.")
+    logger.info("Writing time dataframe to s3 partitioned by year and month in parquet format.")
+    time_df.write.partitionBy(["year", "month"]).format("parquet").mode("overwrite").save(output_base_path + "time")
+    logger.info("Done.")
+    logger.info("Writing songplay dataframe to s3 partitioned by year and month in parquet format.")
+    songplay_df.write.partitionBy(['year', 'month']).format("parquet").mode("overwrite").\
+        save(output_base_path + "songplays")
+    logger.info("Done.")
 
 
 def main() -> None:
@@ -126,7 +131,7 @@ def main() -> None:
     os.environ['AWS_SECRET_ACCESS_KEY'] = config['AWS']['AWS_SECRET_ACCESS_KEY']
     spark = create_spark_session()
     input_data = "s3a://udacity-dend/"
-    output_data = "s3a://udacity-dend/despotakis_analytics/"
+    output_data = "s3a://despotakis-data-lake/"
     process_song_data(spark, input_data, output_data)
     process_log_data(spark, input_data, output_data)
 
